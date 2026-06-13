@@ -5,11 +5,15 @@ Langkah 1 - 6 (Terintegrasi)
 import pandas as pd
 import numpy as np
 import os
+import argparse
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, precision_score
 from sklearn.preprocessing import StandardScaler
 
 
@@ -111,18 +115,18 @@ def detect_golden_cross(df):
 # ==========================================
 # LANGKAH 5: Model Prediksi Machine Learning
 # ==========================================
-def build_model(df):
+def build_model(df, algo_name="rf"):
     print("\n" + "=" * 50)
     print("🤖 LANGKAH 5: Model Prediksi")
     print("=" * 50)
     
-    # Tambahkan indikator baru sebagai fitur untuk ML
-    features = ['MA50', 'MA200', 'MA_Diff', 'RSI', 'MACD', 'BB_Upper', 'BB_Lower', 'close_price']
-    df_clean = df.dropna(subset=features + ['Signal'])
+    # Tambahkan indikator baru sebagai fitur untuk ML (Tanpa MA50 dan MA200 untuk mencegah Data Leakage)
+    features = ['RSI', 'MACD', 'Signal_Line', 'BB_Upper', 'BB_Lower', 'close_price']
+    df_clean = df.dropna(subset=features + ['Signal', 'MA50', 'MA200'])
     
     if len(df_clean) < 10 or df_clean['Signal'].sum() == 0:
         print("⚠️ Data tidak cukup (atau tidak ada Golden Cross) untuk melatih model.")
-        return None
+        return None, None, None
         
     X = df_clean[features].values
     y = df_clean['Signal'].values
@@ -133,20 +137,48 @@ def build_model(df):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
+    if algo_name == "svm":
+        model = SVC(kernel='rbf', probability=True, random_state=42)
+        model_title = "Support Vector Machine (SVM)"
+    elif algo_name == "dt":
+        model = DecisionTreeClassifier(random_state=42)
+        model_title = "Decision Tree"
+    elif algo_name == "lr":
+        model = LogisticRegression(random_state=42, max_iter=1000)
+        model_title = "Logistic Regression"
+    else:
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model_title = "Random Forest"
+        
     model.fit(X_train_scaled, y_train)
     
-    y_pred = model.predict(X_test_scaled)
+    # ---------------------------------------------------------
+    # STRICTLY AVOID FALSE POSITIVE (Konservatif / High Precision)
+    # AI hanya memprediksi Golden Cross (1) jika YAKIN >= 85%
+    # ---------------------------------------------------------
+    if hasattr(model, "predict_proba"):
+        probs = model.predict_proba(X_test_scaled)[:, 1]
+        y_pred = (probs >= 0.85).astype(int)
+    else:
+        y_pred = model.predict(X_test_scaled)
+        
     acc = accuracy_score(y_test, y_pred)
     
-    print(f"✅ Model Random Forest selesai dilatih (Akurasi: {acc*100:.2f}%)")
-    return model
+    # Hitung precision (mengukur jumlah False Positive)
+    # zero_division=0 agar tidak error jika model sama sekali tidak menebak 1
+    prec = precision_score(y_test, y_pred, zero_division=0) 
+    
+    print(f"✅ Model {model_title} selesai dilatih")
+    print(f"   Akurasi   : {acc*100:.2f}%")
+    print(f"   Precision : {prec*100:.2f}% (Tingkat keamanan dari False Positif)")
+    
+    return model, acc, model_title
 
 
 # ==========================================
 # LANGKAH 6: Visualisasi Interaktif (Plotly)
 # ==========================================
-def plot_interactive_chart(df, target_saham='ADRO', save_path='golden_cross_interactive.html'):
+def plot_interactive_chart(df, target_saham='ADRO', save_path='golden_cross_interactive.html', acc=None, model_title=None):
     print("\n" + "=" * 50)
     print("📉 LANGKAH 6: Visualisasi Interaktif")
     print("=" * 50)
@@ -184,9 +216,13 @@ def plot_interactive_chart(df, target_saham='ADRO', save_path='golden_cross_inte
             name='Golden Cross'
         ))
 
+    title_text = f'📈 Analisis Teknikal Interaktif — {target_saham.upper()}'
+    if acc is not None and model_title is not None:
+        title_text += f' | Model: {model_title} (Akurasi: {acc*100:.2f}%)'
+
     # Styling dan Layout
     fig.update_layout(
-        title=f'📈 Analisis Teknikal Interaktif — {target_saham.upper()}',
+        title=title_text,
         yaxis_title='Harga (IDR)',
         xaxis_title='Tanggal',
         template='plotly_dark',
@@ -207,8 +243,15 @@ def plot_interactive_chart(df, target_saham='ADRO', save_path='golden_cross_inte
 # EKSEKUSI PIPELINE
 # ==========================================
 if __name__ == "__main__":
-    FILE_PATH = 'data/data_sample.csv' # Pastikan menggunakan file simulasi 4 tahun yang dibuat sebelumnya
-    TARGET_SAHAM = 'adro'
+    parser = argparse.ArgumentParser(description='Golden Cross Detection Pipeline')
+    parser.add_argument('--file', type=str, default='transaksi_harian_202606082112.csv', help='Path ke file CSV dataset')
+    parser.add_argument('--saham', type=str, default='adro', help='Kode saham yang ingin dianalisis')
+    parser.add_argument('--algo', type=str, default='rf', choices=['rf', 'svm', 'dt', 'lr'], help='Algoritma ML yang digunakan')
+    
+    args = parser.parse_args()
+    FILE_PATH = args.file
+    TARGET_SAHAM = args.saham
+    ALGO = args.algo
     
     if not os.path.exists(FILE_PATH):
         print(f"❌ File '{FILE_PATH}' tidak ditemukan. Pastikan path-nya benar.")
@@ -220,7 +263,7 @@ if __name__ == "__main__":
         df_features = add_technical_indicators(df_clean)
         
         df_signals = detect_golden_cross(df_features)
-        model = build_model(df_signals)
+        model, acc, model_title = build_model(df_signals, algo_name=ALGO)
         
         # Menghasilkan output HTML interaktif
-        plot_interactive_chart(df_signals, target_saham=TARGET_SAHAM)
+        plot_interactive_chart(df_signals, target_saham=TARGET_SAHAM, acc=acc, model_title=model_title)
