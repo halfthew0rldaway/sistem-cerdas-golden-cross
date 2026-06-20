@@ -1,269 +1,271 @@
 """
-PIPELINE LENGKAP DETEKSI GOLDEN CROSS (ADVANCED & INTERACTIVE)
-Langkah 1 - 6 (Terintegrasi)
+PIPELINE LENGKAP DETEKSI GOLDEN CROSS - BEST PRACTICE ML
+=============================================================================
+File ini adalah program utama untuk mendeteksi pola "Golden Cross" pada pergerakan saham.
+Golden Cross adalah pola di mana rata-rata pergerakan jangka pendek (MA20) 
+memotong rata-rata pergerakan jangka panjang (MA50) ke arah atas.
+
+Kode ini dirancang agar mudah dibaca oleh pemula, dengan komentar bahasa Indonesia
+di setiap langkah penting. Program ini menggunakan Machine Learning (Random Forest)
+untuk MEMPREDIKSI apakah Golden Cross akan terjadi besok berdasarkan indikator hari ini.
+=============================================================================
 """
+
 import pandas as pd
 import numpy as np
 import os
 import argparse
+
+# Pustaka untuk visualisasi grafik interaktif
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+
+# Pustaka untuk Machine Learning
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, precision_score
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
+# Pustaka untuk mengatasi data tidak seimbang (Imbalanced Data)
+# RandomUnderSampler membuang data mayoritas secara acak agar jumlahnya seimbang
+from imblearn.under_sampling import RandomUnderSampler
 
 # ==========================================
-# LANGKAH 1: Load Data
+# LANGKAH 1: MEMUAT DATA
 # ==========================================
-def load_data(filepath='data/data_sample.csv'):
-    print("=" * 50)
-    print("📥 LANGKAH 1: Load Data")
-    print("=" * 50)
+def load_data(filepath):
+    """Fungsi untuk membaca data CSV ke dalam format DataFrame Pandas."""
+    print("=" * 60)
+    print(" LANGKAH 1: Membaca Data dari CSV")
+    print("=" * 60)
+    
+    # Membaca file CSV (Perhatikan: separatornya adalah titik koma ';')
     df = pd.read_csv(filepath, sep=';')
-    print(f"✅ Data berhasil dimuat: {len(df)} baris")
+    print(f" Data berhasil dimuat: {len(df)} baris")
+    
     return df
 
-
 # ==========================================
-# LANGKAH 2: Preprocessing
+# LANGKAH 2 & 3: PREPROCESSING & FITUR INDIKATOR
 # ==========================================
-def preprocess(df, target_saham='adro'):
-    print("\n" + "=" * 50)
-    print("🧹 LANGKAH 2: Preprocessing & Filtering")
-    print("=" * 50)
+def preprocess_and_extract_features(df, ma_short=50, ma_long=200):
+    """
+    Membersihkan data dan membuat Indikator Teknikal.
+    Indikator Teknikal adalah rumus matematika yang digunakan trader untuk analisis.
+    """
+    print("\n" + "=" * 60)
+    print(" LANGKAH 2 & 3: Preprocessing & Ekstraksi Fitur (Indikator)")
+    print("=" * 60)
+    
+    # Copy data agar tidak merusak data aslinya
     df = df.copy()
     
-    # Filter saham
-    df_saham = df[df['kode'].str.lower() == target_saham.lower()].copy()
-    print(f"✅ Filter saham '{target_saham.upper()}' diterapkan (Sisa: {len(df_saham)} baris)")
+    # 1. Pastikan kolom tanggal berformat 'datetime' lalu urutkan
+    df['tanggal'] = pd.to_datetime(df['tanggal'])
+    df = df.sort_values(['kode', 'tanggal'])
+    df = df.dropna(subset=['close_price'])
     
-    # Format tanggal
-    df_saham['tanggal'] = pd.to_datetime(df_saham['tanggal'])
-    df_saham = df_saham.sort_values('tanggal')
-    df_saham = df_saham.dropna(subset=['close_price'])
-    df_saham = df_saham.set_index('tanggal')
+    # 2. MENGHITUNG MOVING AVERAGE (Dinamis sesuai Input)
+    # Default: MA50 dan MA200 (Golden Cross Sejati). 
+    # Jika data kurang, user bisa menyesuaikan argumen saat menjalankan program.
+    df['MA_Short'] = df.groupby('kode')['close_price'].transform(lambda x: x.rolling(window=ma_short).mean())
+    df['MA_Long'] = df.groupby('kode')['close_price'].transform(lambda x: x.rolling(window=ma_long).mean())
     
-    print("✅ Kolom 'tanggal' diubah ke datetime dan dijadikan index")
-    return df_saham
-
-
-# ==========================================
-# LANGKAH 3: Feature Engineering (Advanced)
-# ==========================================
-def add_technical_indicators(df):
-    print("\n" + "=" * 50)
-    print("📊 LANGKAH 3: Technical Indicators")
-    print("=" * 50)
-    df = df.copy()
+    # 3. MENGHITUNG INDIKATOR TAMBAHAN UNTUK MACHINE LEARNING
+    # Model ML butuh indikator murni (RSI, MACD) agar tidak sekadar 'menjiplak' rumus MA.
     
-    # 1. Moving Averages
-    df['MA50'] = df['close_price'].rolling(window=50).mean()
-    df['MA200'] = df['close_price'].rolling(window=200).mean()
-    df['MA_Diff'] = df['MA50'] - df['MA200']
+    # A. Return (Persentase kenaikan/penurunan harga harian dan mingguan)
+    df['Return_1d'] = df.groupby('kode')['close_price'].pct_change()
+    df['Return_5d'] = df.groupby('kode')['close_price'].pct_change(5)
     
-    # 2. RSI (Relative Strength Index) - 14 Hari
-    delta = df['close_price'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    # B. RSI (Relative Strength Index) - Indikator Jenuh Beli / Jenuh Jual
+    def calc_rsi(x, w=14):
+        delta = x.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=w).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=w).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    df['RSI'] = df.groupby('kode')['close_price'].transform(calc_rsi)
     
-    # 3. MACD (Moving Average Convergence Divergence)
-    exp1 = df['close_price'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close_price'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = exp1 - exp2
-    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    # C. MACD (Moving Average Convergence Divergence) - Indikator Momentum
+    def calc_macd(x):
+        return x.ewm(span=12).mean() - x.ewm(span=26).mean()
+    df['MACD'] = df.groupby('kode')['close_price'].transform(calc_macd)
     
-    # 4. Bollinger Bands (20 Hari)
-    df['BB_Mid'] = df['close_price'].rolling(window=20).mean()
-    df['BB_Upper'] = df['BB_Mid'] + 2 * df['close_price'].rolling(window=20).std()
-    df['BB_Lower'] = df['BB_Mid'] - 2 * df['close_price'].rolling(window=20).std()
+    # D. Bollinger Bands (Indikator Volatilitas)
+    df['BB_Mid'] = df.groupby('kode')['close_price'].transform(lambda x: x.rolling(20).mean())
+    df['BB_Std'] = df.groupby('kode')['close_price'].transform(lambda x: x.rolling(20).std())
+    df['BB_Upper'] = df['BB_Mid'] + (2 * df['BB_Std'])
+    df['BB_Lower'] = df['BB_Mid'] - (2 * df['BB_Std'])
     
-    print("✅ MA50, MA200, RSI, MACD, dan Bollinger Bands berhasil dihitung!")
+    # Menghitung posisi harga relatif terhadap lebar Bollinger Bands
+    df['BB_Pos'] = (df['close_price'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])
+    
+    print(f" Semua indikator (MA{ma_short}, MA{ma_long}, RSI, MACD, Bollinger Bands) telah dihitung!")
     return df
 
-
 # ==========================================
-# LANGKAH 4: Deteksi Golden Cross
+# LANGKAH 4: MENYIAPKAN TARGET PREDIKSI (Y)
 # ==========================================
-def detect_golden_cross(df):
-    print("\n" + "=" * 50)
-    print("🔍 LANGKAH 4: Deteksi Golden Cross")
-    print("=" * 50)
-    df = df.copy()
-    df['Signal'] = 0
+def define_target(df, ma_short=50, ma_long=200):
+    """
+    Fungsi ini mencari kapan Golden Cross terjadi, HANYA untuk dijadikan label.
+    Penting: ML harus memprediksi MASA DEPAN, bukan HARI INI.
+    """
+    print("\n" + "=" * 60)
+    print(" LANGKAH 4: Menentukan Target (Label) Machine Learning")
+    print("=" * 60)
     
-    cond1 = df['MA50'] > df['MA200']
-    cond2 = df['MA50'].shift(1) <= df['MA200'].shift(1)
-    df.loc[cond1 & cond2, 'Signal'] = 1
+    # 1. Cari titik perpotongan (Golden Cross) yang terjadi HARI INI
+    # Syarat: MA_Short lebih besar dari MA_Long hari ini, TAPI kemarin MA_Short masih di bawah MA_Long
+    cond1 = df['MA_Short'] > df['MA_Long']
+    cond2 = df.groupby('kode')['MA_Short'].shift(1) <= df.groupby('kode')['MA_Long'].shift(1)
+    df['Is_GC_Today'] = (cond1 & cond2).astype(int)
     
-    golden_cross_dates = df[df['Signal'] == 1].index
-    print(f"🎯 Jumlah Golden Cross terdeteksi: {len(golden_cross_dates)}")
+    # 2. MENCEGAH DATA LEAKAGE (BOCORAN KUNCI JAWABAN)
+    # Jika kita menebak Golden Cross HARI INI menggunakan data HARI INI, itu namanya "Data Leakage"
+    # dan akurasinya pasti tidak masuk akal (100% palsu).
+    # SOLUSI: Kita minta ML menebak kejadian BESOK (H+1) berdasarkan data HARI INI.
+    df['Target_GC_Tomorrow'] = df.groupby('kode')['Is_GC_Today'].shift(-1).fillna(0)
     
-    for i, date in enumerate(golden_cross_dates, 1):
-        close_price = df.loc[date, 'close_price']
-        print(f"   {i}. {date.strftime('%Y-%m-%d')} — Harga: IDR {close_price:,.0f}")
-        
+    total_gc = df['Is_GC_Today'].sum()
+    print(f" Total Golden Cross (MA{ma_short} memotong MA{ma_long}) terdeteksi di seluruh data: {total_gc} kali.")
+    print(" Target AI digeser (di-shift) 1 hari ke depan agar AI murni melakukan Forecasting (Meramal Masa Depan).")
+    
     return df
 
-
 # ==========================================
-# LANGKAH 5: Model Prediksi Machine Learning
+# LANGKAH 5: MELATIH MACHINE LEARNING
 # ==========================================
-def build_model(df, algo_name="rf"):
-    print("\n" + "=" * 50)
-    print("🤖 LANGKAH 5: Model Prediksi")
-    print("=" * 50)
+def train_model(df):
+    """Melatih algoritma Random Forest untuk mencari pola di data teknikal."""
+    print("\n" + "=" * 60)
+    print(" LANGKAH 5: Melatih Machine Learning (Random Forest)")
+    print("=" * 60)
     
-    # Tambahkan indikator baru sebagai fitur untuk ML (Tanpa MA50 dan MA200 untuk mencegah Data Leakage)
-    features = ['RSI', 'MACD', 'Signal_Line', 'BB_Upper', 'BB_Lower', 'close_price']
-    df_clean = df.dropna(subset=features + ['Signal', 'MA50', 'MA200'])
+    # 1. Pilih Fitur (X) yang akan dipelajari oleh model
+    # (Kita sengaja tidak memasukkan MA agar AI berpikir mandiri mencari pola)
+    features = ['Return_1d', 'Return_5d', 'RSI', 'MACD', 'BB_Pos', 'volume']
     
-    if len(df_clean) < 10 or df_clean['Signal'].sum() == 0:
-        print("⚠️ Data tidak cukup (atau tidak ada Golden Cross) untuk melatih model.")
-        return None, None, None
-        
+    # Buang baris data yang ada nilai kosong (NaN)
+    df_clean = df.dropna(subset=features + ['Target_GC_Tomorrow', 'MA_Long'])
     X = df_clean[features].values
-    y = df_clean['Signal'].values
+    y = df_clean['Target_GC_Tomorrow'].values
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    if sum(y) < 5:
+        print("⚠ Gagal: Kejadian Golden Cross terlalu sedikit untuk melatih ML.")
+        return None, None
+        
+    # 2. Bagi data: 80% untuk Latihan (Train), 20% untuk Ujian (Test)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     
+    # 3. Standardisasi: Menyamakan skala angka (misal, harga puluhan ribu vs persentase desimal)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    if algo_name == "svm":
-        model = SVC(kernel='rbf', probability=True, random_state=42)
-        model_title = "Support Vector Machine (SVM)"
-    elif algo_name == "dt":
-        model = DecisionTreeClassifier(random_state=42)
-        model_title = "Decision Tree"
-    elif algo_name == "lr":
-        model = LogisticRegression(random_state=42, max_iter=1000)
-        model_title = "Logistic Regression"
-    else:
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model_title = "Random Forest"
-        
-    model.fit(X_train_scaled, y_train)
+    # 4. MENGATASI IMBALANCED DATA (PENTING!)
+    # Data '0' (Tidak ada GC) ada ratusan ribu. Data '1' (Ada GC) cuma ratusan.
+    # Jika tidak diimbangi, model hanya akan menebak '0' terus menerus.
+    print("⚙ Menerapkan Undersampling: Membuang sebagian data kelas 0 agar seimbang dengan kelas 1...")
+    rus = RandomUnderSampler(sampling_strategy=0.5, random_state=42)
+    X_train_res, y_train_res = rus.fit_resample(X_train_scaled, y_train)
     
-    # ---------------------------------------------------------
-    # STRICTLY AVOID FALSE POSITIVE (Konservatif / High Precision)
-    # AI hanya memprediksi Golden Cross (1) jika YAKIN >= 85%
-    # ---------------------------------------------------------
-    if hasattr(model, "predict_proba"):
-        probs = model.predict_proba(X_test_scaled)[:, 1]
-        y_pred = (probs >= 0.85).astype(int)
-    else:
-        y_pred = model.predict(X_test_scaled)
-        
-    acc = accuracy_score(y_test, y_pred)
+    # 5. Latih Model Random Forest
+    # class_weight='balanced' memberikan porsi perhatian lebih besar pada pola yang langka
+    model = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)
+    model.fit(X_train_res, y_train_res)
     
-    # Hitung precision (mengukur jumlah False Positive)
-    # zero_division=0 agar tidak error jika model sama sekali tidak menebak 1
-    prec = precision_score(y_test, y_pred, zero_division=0) 
+    # 6. Evaluasi Model (Ujian)
+    y_pred = model.predict(X_test_scaled)
+    y_prob = model.predict_proba(X_test_scaled)[:, 1]
     
-    print(f"✅ Model {model_title} selesai dilatih")
-    print(f"   Akurasi   : {acc*100:.2f}%")
-    print(f"   Precision : {prec*100:.2f}% (Tingkat keamanan dari False Positif)")
+    print("\n --- HASIL EVALUASI REALISTIS (BUKAN AKURASI PALSU) ---")
+    # Akurasi bisa menipu, karenanya kita melihat ROC-AUC. Di atas 0.7 artinya model sudah bagus.
+    print(f"   Accuracy (Akurasi Global)  : {accuracy_score(y_test, y_pred)*100:.2f}%")
+    print(f"   ROC-AUC Score              : {roc_auc_score(y_test, y_prob):.3f} (Lebih tinggi = lebih baik dalam membedakan pola)")
     
-    return model, acc, model_title
-
+    print("\n   [Confusion Matrix]")
+    print("   Isinya: [Tebak 0 Benar, Tebak 1 Salah (False Positive)]")
+    print("           [Tebak 0 Salah, Tebak 1 Benar (True Positive)]")
+    print(confusion_matrix(y_test, y_pred))
+    
+    return model, scaler
 
 # ==========================================
-# LANGKAH 6: Visualisasi Interaktif (Plotly)
+# LANGKAH 6: VISUALISASI INTERAKTIF (HTML)
 # ==========================================
-def plot_interactive_chart(df, target_saham='ADRO', save_path='golden_cross_interactive.html', acc=None, model_title=None):
-    print("\n" + "=" * 50)
-    print("📉 LANGKAH 6: Visualisasi Interaktif")
-    print("=" * 50)
+def plot_chart(df_all, target_saham, save_path='golden_cross_interactive.html', ma_short=50, ma_long=200):
+    """Membuat grafik Candlestick interaktif yang bisa di-zoom/di-geser lewat Browser."""
+    print("\n" + "=" * 60)
+    print(f" LANGKAH 6: Visualisasi Chart Saham '{target_saham.upper()}'")
+    print("=" * 60)
     
-    # Buat figure
+    # Ambil data spesifik 1 saham saja untuk di-plot
+    df = df_all[df_all['kode'].str.lower() == target_saham.lower()].copy()
+    if len(df) == 0:
+        print(f"⚠ Saham {target_saham.upper()} tidak ditemukan di data CSV.")
+        return
+        
+    df = df.set_index('tanggal')
     fig = go.Figure()
 
-    # 1. Plot Candlestick Chart
+    # A. Gambar Candlestick (Batang Harga)
     fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df['open_price'], high=df['high_price'],
-        low=df['low_price'], close=df['close_price'],
-        name='Harga (OHLC)',
+        x=df.index, open=df['open_price'], high=df['high_price'],
+        low=df['low_price'], close=df['close_price'], name='Candlestick Harga',
         increasing_line_color='#00ff88', decreasing_line_color='#ff6b6b'
     ))
 
-    # 2. Plot MA50 dan MA200
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], line=dict(color='#00d2ff', width=2), name='MA50 (Pendek)'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA200'], line=dict(color='#ffaa00', width=2), name='MA200 (Panjang)'))
+    # B. Gambar Garis Moving Average Dinamis
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA_Short'], line=dict(color='#00d2ff', width=2), name=f'MA{ma_short} (Garis Cepat)'))
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA_Long'], line=dict(color='#ffaa00', width=2), name=f'MA{ma_long} (Garis Lambat)'))
 
-    # 3. Plot Bollinger Bands (Opsional, di-set transparansi rendah agar tidak berantakan)
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='gray', width=1, dash='dot'), name='BB Upper', opacity=0.5))
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='gray', width=1, dash='dot'), name='BB Lower', opacity=0.5))
-
-    # 4. Tandai Golden Cross
-    gc = df[df['Signal'] == 1]
+    # C. Beri Tanda Segitiga Khusus pada Hari di mana Terjadi Golden Cross
+    gc = df[df['Is_GC_Today'] == 1]
     if len(gc) > 0:
         fig.add_trace(go.Scatter(
-            x=gc.index, y=gc['close_price'],
-            mode='markers+text',
-            marker=dict(symbol='triangle-up', color='magenta', size=20, line=dict(color='white', width=2)),
-            text=["GC"] * len(gc),
-            textposition="top center",
-            textfont=dict(color="magenta", size=14, family="Arial Black"),
-            name='Golden Cross'
+            x=gc.index, y=gc['close_price'], mode='markers+text',
+            marker=dict(symbol='triangle-up', color='magenta', size=16),
+            text=["GC"] * len(gc), textposition="top center",
+            textfont=dict(color="magenta", size=12, family="Arial Black"), name='Golden Cross Point'
         ))
+        
+        # Cetak tanggal kejadian ke terminal
+        for date in gc.index:
+            print(f"    Golden Cross terdeteksi di grafik pada tanggal: {date.strftime('%d %B %Y')}")
 
-    title_text = f'📈 Analisis Teknikal Interaktif — {target_saham.upper()}'
-    if acc is not None and model_title is not None:
-        title_text += f' | Model: {model_title} (Akurasi: {acc*100:.2f}%)'
-
-    # Styling dan Layout
+    # Percantik tampilan layar
     fig.update_layout(
-        title=title_text,
-        yaxis_title='Harga (IDR)',
-        xaxis_title='Tanggal',
-        template='plotly_dark',
-        xaxis_rangeslider_visible=True, # Menampilkan slider waktu di bawah
-        hovermode='x unified',          # Menampilkan semua data saat di-hover pada tanggal tertentu
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+        title=f' Analisis Deteksi Golden Cross Saham {target_saham.upper()}',
+        yaxis_title='Harga Rupiah (IDR)', xaxis_title='Tanggal Transaksi',
+        template='plotly_dark', xaxis_rangeslider_visible=True,
+        hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
     )
     
-    # Simpan sebagai file HTML
+    # Simpan ke komputer
     fig.write_html(save_path)
-    
-    print(f"✅ Grafik INTERAKTIF tersimpan sebagai: {save_path}")
-    print(f"👉 SILAKAN BUKA FILE '{save_path}' MENGGUNAKAN BROWSER (Chrome/Safari/Edge) UNTUK MELIHATNYA!")
-    print()
-
+    print(f"\n Selesai! Grafik visualisasi interaktif telah disimpan di: '{save_path}'")
+    print(f" Buka file tersebut menggunakan Browser (Chrome/Edge/Safari) untuk melihat hasilnya.")
 
 # ==========================================
-# EKSEKUSI PIPELINE
+# EKSEKUSI PROGRAM UTAMA
 # ==========================================
+# Bagian ini adalah titik masuk saat program dijalankan lewat terminal
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Golden Cross Detection Pipeline')
-    parser.add_argument('--file', type=str, default='transaksi_harian_202606082112.csv', help='Path ke file CSV dataset')
-    parser.add_argument('--saham', type=str, default='adro', help='Kode saham yang ingin dianalisis')
-    parser.add_argument('--algo', type=str, default='rf', choices=['rf', 'svm', 'dt', 'lr'], help='Algoritma ML yang digunakan')
-    
+    # Menyiapkan argumen agar pengguna bisa mengatur file dan nama saham lewat terminal
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--file', type=str, default='transaksi_harian_202606130928(daridosenbarukhususgoldencross).csv', help='Nama file CSV.')
+    parser.add_argument('--saham', type=str, default='bmtr', help='Kode Saham yang ingin digambar (contoh: adro, bmtr)')
+    parser.add_argument('--ma-short', type=int, default=50, help='Periode Moving Average Cepat (Default: 50)')
+    parser.add_argument('--ma-long', type=int, default=200, help='Periode Moving Average Lambat (Default: 200)')
     args = parser.parse_args()
-    FILE_PATH = args.file
-    TARGET_SAHAM = args.saham
-    ALGO = args.algo
     
-    if not os.path.exists(FILE_PATH):
-        print(f"❌ File '{FILE_PATH}' tidak ditemukan. Pastikan path-nya benar.")
+    if not os.path.exists(args.file):
+        print(f" File '{args.file}' tidak ditemukan. Pastikan file ada di satu folder dengan program ini.")
     else:
-        df_raw = load_data(FILE_PATH)
-        df_clean = preprocess(df_raw, target_saham=TARGET_SAHAM)
-        
-        # Menggunakan fungsi baru untuk indikator teknikal lengkap
-        df_features = add_technical_indicators(df_clean)
-        
-        df_signals = detect_golden_cross(df_features)
-        model, acc, model_title = build_model(df_signals, algo_name=ALGO)
-        
-        # Menghasilkan output HTML interaktif
-        plot_interactive_chart(df_signals, target_saham=TARGET_SAHAM, acc=acc, model_title=model_title)
+        # Program otomatis beradaptasi dengan tipe data dan parameter (Universal)
+        df_raw = load_data(args.file)
+        df_feat = preprocess_and_extract_features(df_raw, ma_short=args.ma_short, ma_long=args.ma_long)
+        df_target = define_target(df_feat, ma_short=args.ma_short, ma_long=args.ma_long)
+        model, scaler = train_model(df_target)
+        plot_chart(df_target, args.saham, ma_short=args.ma_short, ma_long=args.ma_long)

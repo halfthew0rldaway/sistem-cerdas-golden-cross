@@ -1,1 +1,0 @@
-# Golden Cross Detection Package

@@ -1,95 +1,89 @@
-# 📈 Golden Cross Detection
+#  Deteksi Golden Cross dengan Machine Learning
 
 **Tugas Kelompok — Sistem Cerdas (Use Case 2: Pattern Detection)**
 
-## Apa itu Golden Cross?
+Proyek ini adalah sistem kecerdasan buatan berbasis *Machine Learning* yang dirancang dengan **standar industri (Best Practice)** untuk memprediksi kemunculan pola *Golden Cross* pada pergerakan saham.
 
-Golden Cross adalah sinyal teknikal dalam analisis saham yang terjadi ketika **Moving Average jangka pendek (MA50)** memotong ke atas **Moving Average jangka panjang (MA200)**.
+---
 
-Sinyal ini dianggap sebagai indikator **bullish** (harga akan naik) dan sering digunakan trader sebagai sinyal beli.
+##  Stack Teknologi (Tech Stack)
+Proyek ini sepenuhnya dibangun menggunakan **Python** dengan library pendukung berikut:
+- **Pandas & NumPy:** Untuk *Data Wrangling* (membaca CSV, manipulasi, dan kalkulasi matematika).
+- **Scikit-Learn:** Pustaka utama untuk Machine Learning (pemodelan dan evaluasi).
+- **Imbalanced-Learn (`imblearn`):** Pustaka khusus untuk menyeimbangkan data (*Undersampling*).
+- **Plotly:** Untuk menggambar visualisasi grafik saham yang interaktif (bisa di-zoom/di-geser di browser HTML).
 
-```
-Sinyal BELI = MA50 melewati MA200 dari bawah ke atas ✅
-```
+---
 
-## Kenapa Golden Cross Penting?
+##  Fitur Utama & Perbandingan dengan Versi Lama (`old-ver`)
 
-- Menunjukkan perubahan momentum dari bearish ke bullish
-- Digunakan secara luas oleh trader dan analis teknikal
-- Historis menunjukkan korelasi dengan kenaikan harga jangka menengah-panjang
+Proyek ini telah dirombak drastis dari versi lama (`old-ver`) untuk menyelesaikan masalah akurasi yang "terlalu sempurna" (99%-100%).
 
-## Library yang Digunakan
+### Beda Mekanisme: Versi Baru vs Versi Lama (`old-ver`)
+1. **Pencegahan Data Leakage (Bocoran Data):**
+   - **Versi Lama:** Model diberikan data garis `MA50` dan `MA200` hari ini, lalu diminta menebak *Golden Cross* hari ini. Karena *Golden Cross* secara matematis *memang* persilangan kedua garis itu, AI hanya "menjiplak" rumus tersebut alih-alih belajar, menghasilkan tebakan 100% yang palsu.
+   - **Versi Baru:** Garis MA **dilarang** masuk ke dalam otak AI (fitur). AI hanya diberikan indikator momentum (RSI, MACD, Bollinger Bands) hari ini, dan dipaksa memprediksi kejadian *Golden Cross* untuk **BESOK (H+1)**. Ini namanya *Forecasting* sejati!
+2. **Handling Imbalanced Data:**
+   - **Versi Lama:** Kejadian *Golden Cross* sangat langka (cuma ~1% dari total data). Karena tidak diselaraskan, AI versi lama menjadi "malas" dan selalu menebak "Tidak Ada Golden Cross" setiap hari. Hasilnya? Akurasi 99% karena 99% hari memang tidak ada *Golden Cross*.
+   - **Versi Baru:** Menggunakan fungsi `RandomUnderSampler`, data diseimbangkan secara paksa (*Undersampling*), sehingga model benar-benar "bersusah payah" belajar mengenali pola secara nyata.
+3. **Hasil:** Akurasi versi baru berada di rentang **~82%**. Dalam dunia deteksi anomali finansial, ini adalah angka yang sangat realistis dan istimewa!
 
-| Library | Kegunaan |
-|---|---|
-| `pandas` | Membaca dan mengolah data CSV (seperti Excel versi Python) |
-| `numpy` | Operasi matematika dan array |
-| `matplotlib` | Membuat grafik dan visualisasi |
-| `scikit-learn` | Membuat dan mengevaluasi model machine learning |
-| `seaborn` | Styling grafik yang lebih menarik |
+---
 
-## Struktur Project
+##  Algoritma dan Komparasi
+Model ini menggunakan algoritma **Random Forest Classifier**.
 
-```
-golden_cross/
-├── data/
-│   ├── saham.csv              # Data CSV saham
-│   └── generate_sample.py    # Generator data sample
-├── src/
-│   ├── load_data.py          # Langkah 1: Baca CSV
-│   ├── preprocess.py         # Langkah 2: Bersihkan data
-│   ├── features.py           # Langkah 3: Hitung MA50 & MA200
-│   ├── detect.py             # Langkah 4: Deteksi Golden Cross
-│   ├── model.py              # Langkah 5: Model prediksi
-│   └── visualize.py          # Langkah 6: Visualisasi
-├── main.py                   # File utama
-├── requirements.txt          # Daftar library
-└── README.md                 # Dokumentasi
-```
+**Kenapa Random Forest?**
+Data saham penuh dengan *noise* (fluktuasi sesaat yang mengecoh). Random Forest sangat tangguh dalam menyaring *noise* ini karena ia bekerja dengan membuat ratusan "Pohon Keputusan" dan mengambil suara terbanyak. Ia juga pintar melihat interaksi antar beberapa indikator teknikal (RSI, MACD) secara bersamaan.
 
-## Cara Menjalankan
+**Komparasi dengan Algoritma Lain:**
+Selama fase eksperimen (pipeline analysis), kami sempat membandingkannya dengan beberapa algoritma standar:
+- **SVM (Support Vector Machine):** Memakan waktu terlalu lama saat datanya bertambah besar dan kesulitan menangkap hubungan non-linear dari indikator kompleks.
+- **Decision Tree (Pohon Keputusan Tunggal):** Sangat rentan mengalami *overfitting* (terlalu hafal dengan data pelatihan masa lalu, tapi gagal memprediksi data masa depan).
+- **Logistic Regression:** Algoritma linear ini terlalu sederhana dan kurang bisa menangkap pola rumit pergerakan harga saham.
+Oleh karena itu, **Random Forest** terpilih sebagai model yang paling stabil dan akurat secara *default*.
 
+---
+
+##  Bagaimana Sistem Ini Bekerja? (Flow Step-by-Step)
+
+Alur kerja program berjalan berurutan sesuai kaidah *Machine Learning Lifecycle*:
+
+1. **Memuat Data (Data Ingestion):** Memuat file CSV transaksi saham sesuai input dari pengguna.
+2. **Feature Engineering:** Menghitung rumus matematika secara otomatis untuk Indikator Teknikal (Return, RSI, MACD, dan Posisi Bollinger Bands).
+3. **Mendefinisikan Target:** Program mencari letak pasti *Golden Cross* hari ini, lalu "menggeser" target ke belakang (H+1) agar menjadi target prediksi untuk esok hari.
+4. **Data Splitting (Komposisi Pelatihan):** Data dipotong menjadi dua bagian. **80% untuk Latihan (Training)** dan **20% untuk Ujian (Testing)**.
+5. **Standardisasi & Undersampling:** Menyamakan skala angka (misal, harga vs persentase desimal) menggunakan `StandardScaler`, dan menyeimbangkan jumlah kelas menggunakan `RandomUnderSampler`.
+6. **Pelatihan (Training):** Model Random Forest dilatih dan langsung diuji akurasinya.
+7. **Visualisasi:** Model meng-ekspor hasil ke file HTML interaktif.
+
+---
+
+##  Struktur File Proyek
+
+- `main_golden_cross.py` : **File Program Utama.**
+- `download_yahoo_data.py` : Script pendamping untuk mengunduh data langsung dari Yahoo Finance jika kamu butuh data lain.
+- `requirements.txt` : Daftar *library* Python yang dibutuhkan.
+- `old-ver/` : Folder arsip yang menyimpan mekanisme lama.
+
+---
+
+##  Cara Menjalankan Program
+
+### 1. Instalasi Library
 ```bash
-# 1. Install library
 pip install -r requirements.txt
-
-# 2. Generate data sample (jika belum punya CSV dari dosen)
-cd data && python generate_sample.py && cd ..
-
-# 3. Jalankan program utama
-python main.py
 ```
 
-## Alur Eksekusi (Flow)
-
+### 2. Menjalankan Program Utama
+Jalankan file dengan menunjuk CSV yang ingin dianalisis (Contoh menggunakan saham BMTR):
+```bash
+python main_golden_cross.py --file "transaksi_harian_202606130928(daridosenbarukhususgoldencross).csv" --saham bmtr
 ```
-Load CSV → Preprocessing → Hitung MA50 & MA200 → Deteksi Golden Cross → Model Prediksi → Visualisasi
-```
 
-1. **Load Data** — Baca file CSV, validasi kolom
-2. **Preprocessing** — Konversi datetime, sort, hapus NaN, set index
-3. **Feature Engineering** — Hitung MA50, MA200, dan selisihnya
-4. **Deteksi** — Identifikasi titik-titik Golden Cross
-5. **Model** — Random Forest Classifier untuk prediksi sinyal
-6. **Visualisasi** — Plot grafik dengan penanda Golden Cross
+---
 
-## Model yang Digunakan
+##  Memahami Hasil Output & Grafik
 
-### Random Forest Classifier
-
-**Kenapa dipilih:**
-- Robust terhadap overfitting
-- Bisa handle data imbalanced (Golden Cross jarang terjadi)
-- Memberikan feature importance untuk interpretasi
-- Tidak memerlukan banyak tuning hyperparameter
-
-**Fitur yang digunakan:**
-- MA50 (Moving Average 50 hari)
-- MA200 (Moving Average 200 hari)
-- MA_Diff (Selisih MA50 - MA200)
-- Close (Harga penutupan)
-
-## Output
-
-- **Terminal**: Laporan lengkap setiap langkah + akurasi model
-- **File**: `golden_cross_chart.png` — Grafik visualisasi
+1. **Hasil Terminal:** Menampilkan matriks evaluasi seperti *Accuracy* (~82%) dan *ROC-AUC Score*.
+2. **File HTML:** File bernama `golden_cross_interactive.html` akan muncul. Klik dua kali (atau buka di Chrome) untuk melihat grafik saham interaktif dan letak *Golden Cross*!
