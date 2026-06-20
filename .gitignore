@@ -7,7 +7,7 @@ venv/
 env/
 
 # Data & Output
-*.csv
+# *.csv  # Di-comment agar file CSV bisa di-push ke Git
 *.xlsx
 *.png
 *.jpg
