@@ -100,7 +100,31 @@ def preprocess_and_extract_features(df, ma_short=50, ma_long=200):
     # Menghitung posisi harga relatif terhadap lebar Bollinger Bands
     df['BB_Pos'] = (df['close_price'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])
     
-    print(f" Semua indikator (MA{ma_short}, MA{ma_long}, RSI, MACD, Bollinger Bands) telah dihitung!")
+    # E. FITUR BARU 1: Derivative Moving Average (Menangkap Momentum tanpa Data Leakage)
+    # Menghitung persentase jarak antara MA Pendek dan MA Panjang untuk melihat seberapa dekat persilangan
+    df['ma_gap_pct'] = (df['MA_Short'] - df['MA_Long']) / df['MA_Long'] * 100
+    # Menghitung kecepatan/kemiringan tren MA Pendek (slope) dalam 5 hari terakhir
+    df['ma_slope'] = df['MA_Short'] - df.groupby('kode')['MA_Short'].shift(5)
+
+    # F. FITUR BARU 2: Indikator Tambahan (Stochastic Oscillator & ATR)
+    # Stochastic Oscillator: Mengukur apakah harga sudah jenuh beli/jual secara absolut dibanding titik tertinggi-terendah 14 hari
+    low_min = df.groupby('kode')['low_price'].transform(lambda x: x.rolling(window=14).min())
+    high_max = df.groupby('kode')['high_price'].transform(lambda x: x.rolling(window=14).max())
+    df['Stochastic'] = 100 * (df['close_price'] - low_min) / (high_max - low_min)
+    
+    # ATR (Average True Range): Mengukur tingkat volatilitas (keliaran fluktuasi harga) pasar selama 14 hari
+    tr1 = abs(df['high_price'] - df['low_price'])
+    tr2 = abs(df['high_price'] - df.groupby('kode')['close_price'].shift(1))
+    tr3 = abs(df['low_price'] - df.groupby('kode')['close_price'].shift(1))
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['ATR'] = true_range.groupby(df['kode']).transform(lambda x: x.rolling(window=14).mean())
+
+    # G. FITUR BARU 3: Moving Average Periode Lain (Konteks Tren Tambahan)
+    # Menambah MA20 (tren sangat pendek) dan MA100 (tren menengah) sebagai fitur ekstra
+    df['MA_20'] = df.groupby('kode')['close_price'].transform(lambda x: x.rolling(window=20).mean())
+    df['MA_100'] = df.groupby('kode')['close_price'].transform(lambda x: x.rolling(window=100).mean())
+    
+    print(f" Semua indikator (MA{ma_short}, MA{ma_long}, RSI, MACD, BB, Stochastic, ATR, dll) telah dihitung!")
     return df
 
 # ==========================================
@@ -143,8 +167,11 @@ def train_model(df):
     print("=" * 60)
     
     # 1. Pilih Fitur (X) yang akan dipelajari oleh model
-    # (Kita sengaja tidak memasukkan MA agar AI berpikir mandiri mencari pola)
-    features = ['Return_1d', 'Return_5d', 'RSI', 'MACD', 'BB_Pos', 'volume']
+    # Memasukkan semua 12 fitur (kolom) baru untuk memperkaya kemampuan belajar AI
+    features = [
+        'Return_1d', 'Return_5d', 'RSI', 'MACD', 'BB_Pos', 'volume',
+        'ma_gap_pct', 'ma_slope', 'Stochastic', 'ATR', 'MA_20', 'MA_100'
+    ]
     
     # Buang baris data yang ada nilai kosong (NaN)
     df_clean = df.dropna(subset=features + ['Target_GC_Tomorrow', 'MA_Long'])
@@ -152,7 +179,7 @@ def train_model(df):
     y = df_clean['Target_GC_Tomorrow'].values
     
     if sum(y) < 5:
-        print("⚠ Gagal: Kejadian Golden Cross terlalu sedikit untuk melatih ML.")
+        print(" Gagal: Kejadian Golden Cross terlalu sedikit untuk melatih ML.")
         return None, None
         
     # 2. Bagi data: 80% untuk Latihan (Train), 20% untuk Ujian (Test)
@@ -166,7 +193,7 @@ def train_model(df):
     # 4. MENGATASI IMBALANCED DATA (PENTING!)
     # Data '0' (Tidak ada GC) ada ratusan ribu. Data '1' (Ada GC) cuma ratusan.
     # Jika tidak diimbangi, model hanya akan menebak '0' terus menerus.
-    print("⚙ Menerapkan Undersampling: Membuang sebagian data kelas 0 agar seimbang dengan kelas 1...")
+    print(" Menerapkan Undersampling: Membuang sebagian data kelas 0 agar seimbang dengan kelas 1...")
     rus = RandomUnderSampler(sampling_strategy=0.5, random_state=42)
     X_train_res, y_train_res = rus.fit_resample(X_train_scaled, y_train)
     
@@ -203,7 +230,7 @@ def plot_chart(df_all, target_saham, save_path='golden_cross_interactive.html', 
     # Ambil data spesifik 1 saham saja untuk di-plot
     df = df_all[df_all['kode'].str.lower() == target_saham.lower()].copy()
     if len(df) == 0:
-        print(f"⚠ Saham {target_saham.upper()} tidak ditemukan di data CSV.")
+        print(f" Saham {target_saham.upper()} tidak ditemukan di data CSV.")
         return
         
     df = df.set_index('tanggal')
