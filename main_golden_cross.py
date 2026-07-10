@@ -14,6 +14,7 @@ untuk MEMPREDIKSI apakah Golden Cross akan terjadi besok berdasarkan indikator h
 import pandas as pd
 import numpy as np
 import os
+import json
 import argparse
 
 # Pustaka untuk visualisasi grafik interaktif
@@ -160,6 +161,47 @@ def define_target(df, ma_short=50, ma_long=200):
 # ==========================================
 # LANGKAH 5: MELATIH MACHINE LEARNING
 # ==========================================
+
+def print_eval_metrics(y_true, y_pred, y_prob, title):
+    """Helper function untuk mencetak metrik evaluasi secara rapih (Best Practice: DRY).
+    Mengembalikan dict berisi semua metrik untuk disimpan ke JSON."""
+    acc = accuracy_score(y_true, y_pred) * 100
+    auc = roc_auc_score(y_true, y_prob) if sum(y_true) > 0 else 0.0
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    
+    # Hitung Precision & Recall kelas 1 secara manual
+    tp = int(cm[1, 1])
+    fp = int(cm[0, 1])
+    fn = int(cm[1, 0])
+    tn = int(cm[0, 0])
+    precision = tp / (tp + fp) * 100 if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) * 100 if (tp + fn) > 0 else 0.0
+    support_pos = int(sum(y_true))
+    support_neg = int(len(y_true) - sum(y_true))
+    
+    print(f"\n --- {title} ---")
+    print(f"   Accuracy : {acc:.2f}%")
+    if sum(y_true) > 0:
+        print(f"   ROC-AUC  : {auc:.3f}")
+    else:
+        print("   ROC-AUC  : N/A (Tidak ada target 1 di data ini)")
+    
+    print(f"\n   [Classification Report - {title}]")
+    print(classification_report(y_true, y_pred, zero_division=0))
+    
+    print(f"   [Confusion Matrix - {title}]")
+    print(f"   True Negative  (TN) : {tn:<5} | False Positive (FP) : {fp}")
+    print(f"   False Negative (FN) : {fn:<5} | True Positive  (TP) : {tp}\n")
+    
+    return {
+        "accuracy": round(acc, 2),
+        "roc_auc": round(auc, 3),
+        "precision": round(precision, 1),
+        "recall": round(recall, 1),
+        "tn": tn, "fp": fp, "fn": fn, "tp": tp,
+        "support_pos": support_pos, "support_neg": support_neg
+    }
+
 def train_model(df):
     """Melatih algoritma Random Forest untuk mencari pola di data teknikal."""
     print("\n" + "=" * 60)
@@ -182,39 +224,72 @@ def train_model(df):
         print(" Gagal: Kejadian Golden Cross terlalu sedikit untuk melatih ML.")
         return None, None
         
-    # 2. Bagi data: 80% untuk Latihan (Train), 20% untuk Ujian (Test)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    # 2. Bagi data: 70% Train, 15% Validation, 15% Testing
+    # Pertama pisahkan 30% untuk Validation & Test secara Stratified
+    X_train_temp, X_temp, y_train_temp, y_temp = train_test_split(X, y, test_size=0.30, random_state=42, stratify=y)
+    # Kemudian pisahkan sisa 30% menjadi 15% Val dan 15% Test
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
     
     # 3. Standardisasi: Menyamakan skala angka (misal, harga puluhan ribu vs persentase desimal)
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_train_scaled = scaler.fit_transform(X_train_temp)
+    X_val_scaled = scaler.transform(X_val)
     X_test_scaled = scaler.transform(X_test)
     
     # 4. MENGATASI IMBALANCED DATA (PENTING!)
-    # Data '0' (Tidak ada GC) ada ratusan ribu. Data '1' (Ada GC) cuma ratusan.
-    # Jika tidak diimbangi, model hanya akan menebak '0' terus menerus.
     print(" Menerapkan Undersampling: Membuang sebagian data kelas 0 agar seimbang dengan kelas 1...")
     rus = RandomUnderSampler(sampling_strategy=0.5, random_state=42)
-    X_train_res, y_train_res = rus.fit_resample(X_train_scaled, y_train)
+    X_train_res, y_train_res = rus.fit_resample(X_train_scaled, y_train_temp)
     
     # 5. Latih Model Random Forest
-    # class_weight='balanced' memberikan porsi perhatian lebih besar pada pola yang langka
     model = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)
     model.fit(X_train_res, y_train_res)
     
-    # 6. Evaluasi Model (Ujian)
-    y_pred = model.predict(X_test_scaled)
-    y_prob = model.predict_proba(X_test_scaled)[:, 1]
+    # 6. Evaluasi 4 Skenario Pengujian
+    all_metrics = {}
+    total_rows = len(df)
+    total_gc = int(df['Is_GC_Today'].sum())
     
-    print("\n --- HASIL EVALUASI REALISTIS (BUKAN AKURASI PALSU) ---")
-    # Akurasi bisa menipu, karenanya kita melihat ROC-AUC. Di atas 0.7 artinya model sudah bagus.
-    print(f"   Accuracy (Akurasi Global)  : {accuracy_score(y_test, y_pred)*100:.2f}%")
-    print(f"   ROC-AUC Score              : {roc_auc_score(y_test, y_prob):.3f} (Lebih tinggi = lebih baik dalam membedakan pola)")
+    # Validation Set
+    y_val_pred = model.predict(X_val_scaled)
+    y_val_prob = model.predict_proba(X_val_scaled)[:, 1]
+    all_metrics['validation'] = print_eval_metrics(y_val, y_val_pred, y_val_prob, "EVALUASI VALIDATION SET (15%)")
+
+    # Test Set Standar
+    y_test_pred = model.predict(X_test_scaled)
+    y_test_prob = model.predict_proba(X_test_scaled)[:, 1]
+    all_metrics['test_standar'] = print_eval_metrics(y_test, y_test_pred, y_test_prob, "SKENARIO 1: EVALUASI PADA TEST SET STANDAR (15%)")
+
+    # Out-Of-Time (15% Terbaru Kronologis)
+    # Mengambil 15% data terbaru dari setiap kode saham tanpa mengacak
+    df_oot = df_clean.groupby('kode', group_keys=False).apply(lambda x: x.tail(max(1, int(len(x)*0.15))))
+    X_oot = df_oot[features].values
+    y_oot = df_oot['Target_GC_Tomorrow'].values
     
-    print("\n   [Confusion Matrix]")
-    print("   Isinya: [Tebak 0 Benar, Tebak 1 Salah (False Positive)]")
-    print("           [Tebak 0 Salah, Tebak 1 Benar (True Positive)]")
-    print(confusion_matrix(y_test, y_pred))
+    X_oot_scaled = scaler.transform(X_oot)
+    y_oot_pred = model.predict(X_oot_scaled)
+    y_oot_prob = model.predict_proba(X_oot_scaled)[:, 1]
+    all_metrics['oot'] = print_eval_metrics(y_oot, y_oot_pred, y_oot_prob, "SKENARIO 2: EVALUASI OUT-OF-TIME (15% TERBARU KRONOLOGIS)")
+
+    # Noise Pada Test Set
+    # Tambahkan noise sebesar 5% dari standar deviasi masing-masing fitur ke test set
+    std_devs = np.std(X_test, axis=0)
+    noise = np.random.normal(0, std_devs * 0.05, X_test.shape)
+    X_test_noisy = X_test + noise
+    X_test_noisy_scaled = scaler.transform(X_test_noisy)
+    
+    y_noisy_pred = model.predict(X_test_noisy_scaled)
+    y_noisy_prob = model.predict_proba(X_test_noisy_scaled)[:, 1]
+    all_metrics['noise'] = print_eval_metrics(y_test, y_noisy_pred, y_noisy_prob, "SKENARIO 3: EVALUASI DENGAN NOISE PADA TEST SET")
+    
+    # Simpan semua metrik ke JSON agar bisa dibaca oleh Web Dashboard
+    json_output = {
+        "dataset": {"total_rows": total_rows, "total_gc": total_gc},
+        "scenarios": all_metrics
+    }
+    with open('metrics_results.json', 'w') as f:
+        json.dump(json_output, f, indent=2)
+    print(" Metrik evaluasi telah disimpan ke metrics_results.json")
     
     return model, scaler
 
@@ -274,25 +349,38 @@ def plot_chart(df_all, target_saham, save_path='golden_cross_interactive.html', 
     print(f"\n Selesai! Grafik visualisasi interaktif telah disimpan di: '{save_path}'")
     print(f" Buka file tersebut menggunakan Browser (Chrome/Edge/Safari) untuk melihat hasilnya.")
 
-# ==========================================
-# EKSEKUSI PROGRAM UTAMA
-# ==========================================
-# Bagian ini adalah titik masuk saat program dijalankan lewat terminal
+# ==============================================================================
+# PIPELINE EKSEKUSI UTAMA (LINEAR EXECUTION)
+# ==============================================================================
+# Bagian ini adalah titik masuk saat program dijalankan lewat terminal, dirancang
+# secara terstruktur dan linear dari ekstraksi data hingga visualisasi hasil.
 if __name__ == "__main__":
-    # Menyiapkan argumen agar pengguna bisa mengatur file dan nama saham lewat terminal
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--file', type=str, default='transaksi_harian_202606130928(daridosenbarukhususgoldencross).csv', help='Nama file CSV.')
-    parser.add_argument('--saham', type=str, default='bmtr', help='Kode Saham yang ingin digambar (contoh: adro, bmtr)')
+    # Inisialisasi argumen CLI agar parameter dinamis tanpa mengubah source code
+    parser = argparse.ArgumentParser(description="Pipeline Machine Learning Prediksi Golden Cross")
+    parser.add_argument('--file', type=str, default='data_tester/daridosenbarukhususgoldencross.csv', help='Nama file CSV masukan.')
+    parser.add_argument('--saham', type=str, default='bmtr', help='Kode Saham untuk dirender grafiknya (contoh: adro, bmtr)')
     parser.add_argument('--ma-short', type=int, default=50, help='Periode Moving Average Cepat (Default: 50)')
     parser.add_argument('--ma-long', type=int, default=200, help='Periode Moving Average Lambat (Default: 200)')
     args = parser.parse_args()
     
     if not os.path.exists(args.file):
-        print(f" File '{args.file}' tidak ditemukan. Pastikan file ada di satu folder dengan program ini.")
+        print(f"❌ File '{args.file}' tidak ditemukan. Pastikan file berada di direktori yang sama.")
     else:
-        # Program otomatis beradaptasi dengan tipe data dan parameter (Universal)
+        # ----------------------------------------------------------------------
+        # PIPELINE MACHINE LEARNING - DIEKSEKUSI SECARA BERURUTAN (LINEAR)
+        # ----------------------------------------------------------------------
+        
+        # LANGKAH 1: Data Ingestion (Membaca data mentah dari sumber CSV)
         df_raw = load_data(args.file)
+        
+        # LANGKAH 2 & 3: Feature Engineering (Mengekstrak 12 indikator teknikal)
         df_feat = preprocess_and_extract_features(df_raw, ma_short=args.ma_short, ma_long=args.ma_long)
+        
+        # LANGKAH 4: Target Definition (Menandai dan menggeser label T+1)
         df_target = define_target(df_feat, ma_short=args.ma_short, ma_long=args.ma_long)
+        
+        # LANGKAH 5: Model Training & Evaluation (Pelatihan, Undersampling, & Metrik)
         model, scaler = train_model(df_target)
+        
+        # LANGKAH 6: Data Visualization (Merender grafik interaktif berbasis HTML)
         plot_chart(df_target, args.saham, ma_short=args.ma_short, ma_long=args.ma_long)

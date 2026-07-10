@@ -51,11 +51,11 @@ else:
     # 5. Menyimpan ke dalam File CSV
     # Sep=';' artinya kita memisahkan kolom dengan titik koma, bukan koma.
     # index=False agar nomor urut (0, 1, 2...) tidak ikut tersimpan ke dalam file.
-    output_filename = 'data_adro_5_tahun.csv'
+    output_filename = 'data_tester/data_adro_5_tahun.csv'
     df_formatted.to_csv(output_filename, sep=';', index=False)
     
     print(f"✅ Selesai! Data final berhasil disimpan dalam file: '{output_filename}'")
     print(f"📊 Total baris data yang didapat: {len(df_formatted)} hari perdagangan.")
     print("💡 TIPS: Sekarang kamu bisa mengetes Machine Learning menggunakan data 5 tahun ini dengan perintah:")
-    print("   python main_golden_cross.py --file data_adro_5_tahun.csv --saham adro")
+    print("   python main_golden_cross.py --file data_tester/data_adro_5_tahun.csv --saham adro")
 

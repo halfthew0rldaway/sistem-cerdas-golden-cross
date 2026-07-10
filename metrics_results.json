@@ -1,0 +1,56 @@
+{
+  "dataset": {
+    "total_rows": 138728,
+    "total_gc": 25
+  },
+  "scenarios": {
+    "validation": {
+      "accuracy": 91.89,
+      "roc_auc": 0.854,
+      "precision": 0.7,
+      "recall": 50.0,
+      "tn": 3183,
+      "fp": 279,
+      "fn": 2,
+      "tp": 2,
+      "support_pos": 4,
+      "support_neg": 3462
+    },
+    "test_standar": {
+      "accuracy": 91.2,
+      "roc_auc": 0.937,
+      "precision": 1.0,
+      "recall": 75.0,
+      "tn": 3159,
+      "fp": 304,
+      "fn": 1,
+      "tp": 3,
+      "support_pos": 4,
+      "support_neg": 3463
+    },
+    "oot": {
+      "accuracy": 98.19,
+      "roc_auc": 0.947,
+      "precision": 3.5,
+      "recall": 66.7,
+      "tn": 3030,
+      "fp": 55,
+      "fn": 1,
+      "tp": 2,
+      "support_pos": 3,
+      "support_neg": 3085
+    },
+    "noise": {
+      "accuracy": 92.15,
+      "roc_auc": 0.876,
+      "precision": 0.4,
+      "recall": 25.0,
+      "tn": 3194,
+      "fp": 269,
+      "fn": 3,
+      "tp": 1,
+      "support_pos": 4,
+      "support_neg": 3463
+    }
+  }
+}
